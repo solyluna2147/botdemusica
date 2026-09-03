@@ -318,51 +318,80 @@ class MusicQueue {
         try { fs.chmodSync(ytdlBin, '755'); } catch {}
       }
 
-      console.log(`[AUDIO] Transmitiendo audio con motor SoundCloud: ${this.currentSong.title}`);
+      console.log(`[AUDIO] Obteniendo stream completo para: ${this.currentSong.title}`);
 
-      let targetUrl = this.currentSong.url;
-      if (!targetUrl.includes('soundcloud.com') && !targetUrl.startsWith('scsearch:')) {
-        targetUrl = `scsearch:${this.currentSong.title || targetUrl}`;
+      const isSoundcloud = this.currentSong.url.includes('soundcloud.com') || this.currentSong.url.startsWith('scsearch:');
+
+      let directStreamUrl = null;
+
+      if (!isSoundcloud) {
+        // Extraer la URL de la pista completa directamente sin límite de preview
+        directStreamUrl = await new Promise((resolve) => {
+          const p = cp.spawn(ytdlBin, [
+            '-f', '18/bestaudio/best',
+            '--force-ipv4',
+            '--extractor-args', 'youtube:player_client=ios,android',
+            '--user-agent', 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; es_ES; Pixel 8 Pro)',
+            '-g',
+            this.currentSong.url
+          ], { windowsHide: true });
+
+          let out = '';
+          p.stdout.on('data', d => { out += d.toString(); });
+          p.on('close', () => {
+            const link = out.trim().split('\n').find(l => l.startsWith('http'));
+            resolve(link || null);
+          });
+          p.on('error', () => resolve(null));
+        });
       }
 
-      const ytdlArgs = [
-        '-f', 'bestaudio/best',
-        '-o', '-',
-        '--no-playlist',
-        targetUrl
-      ];
+      let ffmpegProcess;
 
-      // 1. Proceso de extracción directa en streaming sin guardar en disco
-      const ytdlProcess = cp.spawn(ytdlBin, ytdlArgs, {
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
+      if (directStreamUrl) {
+        // Transmisión directa y completa con auto-reconexión a los servidores de audio
+        ffmpegProcess = cp.spawn(ffmpeg, [
+          '-reconnect', '1',
+          '-reconnect_streamed', '1',
+          '-reconnect_delay_max', '5',
+          '-i', directStreamUrl,
+          '-f', 's16le',
+          '-ar', '48000',
+          '-ac', '2',
+          'pipe:1'
+        ], {
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore']
+        });
+      } else {
+        // Fallback por pipe si es SoundCloud
+        const ytdlProcess = cp.spawn(ytdlBin, [
+          '-f', 'bestaudio/best',
+          '-o', '-',
+          '--no-playlist',
+          this.currentSong.url
+        ], {
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore']
+        });
 
-      // 2. FFmpeg decodifica el flujo en tiempo real a formato Discord
-      const ffmpegProcess = cp.spawn(ffmpeg, [
-        '-i', 'pipe:0',
-        '-f', 's16le',
-        '-ar', '48000',
-        '-ac', '2',
-        'pipe:1'
-      ], {
-        windowsHide: true,
-        stdio: ['pipe', 'pipe', 'ignore']
-      });
+        ffmpegProcess = cp.spawn(ffmpeg, [
+          '-i', 'pipe:0',
+          '-f', 's16le',
+          '-ar', '48000',
+          '-ac', '2',
+          'pipe:1'
+        ], {
+          windowsHide: true,
+          stdio: ['pipe', 'pipe', 'ignore']
+        });
 
-      this.currentYtdlProcess = ytdlProcess;
+        this.currentYtdlProcess = ytdlProcess;
+        ytdlProcess.stdout.pipe(ffmpegProcess.stdin);
+      }
+
       this.currentFfmpegProcess = ffmpegProcess;
-
-      ytdlProcess.stdout.pipe(ffmpegProcess.stdin);
-
-      ytdlProcess.stderr.on('data', d => {
-        const str = d.toString();
-        if (str.includes('ERROR:')) console.error('[YT-DLP ERR]:', str.trim());
-      });
-
-      ytdlProcess.on('error', (err) => console.error('[YT-DLP PROCESS ERROR]:', err));
-      ffmpegProcess.on('error', (err) => console.error('[FFMPEG PROCESS ERROR]:', err));
-      ffmpegProcess.stdin.on('error', () => {});
+      ffmpegProcess.on('error', () => {});
 
       const resource = createAudioResource(ffmpegProcess.stdout, {
         inputType: StreamType.Raw,
@@ -524,13 +553,12 @@ async function handleAddSong(query, messageOrInteraction, voiceChannel) {
         requestedBy: author
       };
     } else {
-      // Si es un enlace de YouTube o cualquier otro, leemos el título y lo reproducimos directo por SoundCloud
       const search = await yts(query);
       if (search && search.videos && search.videos.length > 0) {
         const v = search.videos[0];
         songInfo = {
           title: v.title,
-          url: `scsearch:${v.title}`,
+          url: v.url,
           duration: v.timestamp || 'Desconocida',
           thumbnail: v.thumbnail,
           requestedBy: author
@@ -538,7 +566,7 @@ async function handleAddSong(query, messageOrInteraction, voiceChannel) {
       } else {
         songInfo = {
           title: 'Canción en línea',
-          url: `scsearch:${query}`,
+          url: query,
           duration: '03:30',
           thumbnail: 'https://i.ibb.co/Mm7y46n/36m5Vn-E.gif',
           requestedBy: author
@@ -553,7 +581,7 @@ async function handleAddSong(query, messageOrInteraction, voiceChannel) {
     const v = search.videos[0];
     songInfo = {
       title: v.title,
-      url: `scsearch:${v.title}`,
+      url: v.url,
       duration: v.timestamp || 'Desconocida',
       thumbnail: v.thumbnail,
       requestedBy: author
