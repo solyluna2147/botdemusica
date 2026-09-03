@@ -188,12 +188,23 @@ class MusicQueue {
     this.currentFfmpegProcess = null;
     this.dashboardMessage = null; // Guarda el mensaje principal para editarlo
 
-    this.player.on(AudioPlayerStatus.Idle, () => {
-      this.playNext();
+    this.player.on(AudioPlayerStatus.Playing, () => {
+      console.log('▶️ [PLAYER] Reproductor de Discord en estado PLAYING (emitiendo voz activa).');
+    });
+
+    this.player.on(AudioPlayerStatus.Buffering, () => {
+      console.log('⏳ [PLAYER] Buffering audio...');
+    });
+
+    this.player.on(AudioPlayerStatus.Idle, (oldState) => {
+      if (oldState.status === AudioPlayerStatus.Playing) {
+        console.log('⏹️ [PLAYER] Canción finalizada, pasando a la siguiente.');
+        this.playNext();
+      }
     });
 
     this.player.on('error', (error) => {
-      console.error('Error de AudioPlayer:', error);
+      console.error('❌ [PLAYER ERROR]:', error.message || error);
       this.playNext();
     });
   }
@@ -283,41 +294,35 @@ class MusicQueue {
 
       console.log(`[AUDIO] Conectando FFmpeg al stream de audio directo...`);
 
-      // 2. FFmpeg decodifica y empaqueta en Ogg Opus nativo (el formato directo de Discord)
+      // 2. FFmpeg transmite el stream directo de YouTube sin descargar ningún archivo a disco
       const ffmpegProcess = cp.spawn(ffmpeg, [
         '-reconnect', '1',
         '-reconnect_streamed', '1',
         '-reconnect_delay_max', '5',
         '-i', directUrl,
-        '-c:a', 'libopus',
-        '-b:a', '128k',
-        '-f', 'opus',
+        '-analyzeduration', '0',
+        '-loglevel', '0',
+        '-f', 's16le',
         '-ar', '48000',
         '-ac', '2',
         'pipe:1'
       ], {
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'ignore']
       });
 
       this.currentFfmpegProcess = ffmpegProcess;
-
-      ffmpegProcess.stderr.on('data', d => {
-        const msg = d.toString();
-        if (msg.includes('Error') || msg.includes('Invalid')) console.error('[FFMPEG ERROR]:', msg.trim());
-      });
-
-      ffmpegProcess.on('error', (err) => console.error('[FFMPEG SPAWN ERROR]:', err));
+      ffmpegProcess.on('error', () => {});
 
       const resource = createAudioResource(ffmpegProcess.stdout, {
-        inputType: StreamType.OggOpus,
+        inputType: StreamType.Raw,
         inlineVolume: true
       });
 
       resource.volume?.setVolume(this.volume / 100);
       this.player.play(resource);
 
-      console.log('✅ Audio OggOpus nativo transmitiéndose a Discord.');
+      console.log('📡 [STREAMING EN VIVO] Sonido transmitiéndose directamente al canal de voz.');
 
       // Si ya hay un menú abierto, lo editamos para no crear mensajes nuevos
       if (this.dashboardMessage) {
