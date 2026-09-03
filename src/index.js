@@ -62,7 +62,7 @@ const bannerGifPath = path.join(__dirname, 'gifs', 'banner.gif');
 const queues = new Map();
 
 function formatTime(ms) {
-  const totalSeconds = Math.floor(ms / 1000);
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
@@ -81,16 +81,20 @@ function createProgressBar(currentMs, totalDurationStr) {
 
   const currentStr = formatTime(currentMs);
   if (!totalMs || totalMs <= 0) {
-    return `🔴 🔘━━━━━━━━━━━━━━━━━━━ 📡 En Directo`;
+    return `🔴 \`${currentStr}\` ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬ 📡 \`EN DIRECTO\``;
   }
 
   const percentage = Math.min(Math.max(currentMs / totalMs, 0), 1);
-  const totalBars = 15;
-  const progressBars = Math.round(totalBars * percentage);
-  const emptyBars = totalBars - progressBars;
+  const totalBlocks = 16;
+  const progressBlocks = Math.round(totalBlocks * percentage);
+  const percentNumber = Math.floor(percentage * 100);
 
-  const bar = '━'.repeat(Math.max(progressBars - 1, 0)) + '🔘' + '━'.repeat(Math.max(emptyBars, 0));
-  return `▶️ \`${currentStr}\` [${bar}] \`${totalDurationStr}\``;
+  // Barra de diseño Hi-Fi con bloques sólidos rojos/blancos y cursor de reproducción
+  const filled = '█'.repeat(Math.max(progressBlocks - 1, 0));
+  const pointer = progressBlocks > 0 ? '🔴' : '';
+  const empty = '░'.repeat(Math.max(totalBlocks - progressBlocks, 0));
+
+  return `\`${currentStr}\` [${filled}${pointer}${empty}] \`${totalDurationStr}\` \`(${percentNumber}%)\``;
 }
 
 /**
@@ -239,13 +243,27 @@ class MusicQueue {
       }
     });
 
-    this.player.on('error', (error) => {
-      console.error('❌ [PLAYER ERROR]:', error.message || error);
-      this.playNext();
-    });
+    this.liveUpdateInterval = null;
+  }
+
+  startLiveUpdate() {
+    this.stopLiveUpdate();
+    this.liveUpdateInterval = setInterval(() => {
+      if (this.playing && this.dashboardMessage && !this.paused) {
+        this.updateDashboard().catch(() => {});
+      }
+    }, 6000);
+  }
+
+  stopLiveUpdate() {
+    if (this.liveUpdateInterval) {
+      clearInterval(this.liveUpdateInterval);
+      this.liveUpdateInterval = null;
+    }
   }
 
   killProcesses() {
+    this.stopLiveUpdate();
     if (this.currentYtdlProcess) {
       try { this.currentYtdlProcess.kill(); } catch {}
       this.currentYtdlProcess = null;
@@ -303,7 +321,13 @@ class MusicQueue {
       console.log(`[AUDIO] Transmitiendo audio en directo: ${this.currentSong.title}`);
 
       const isYouTube = this.currentSong.url.includes('youtube.com') || this.currentSong.url.includes('youtu.be');
-      const isSoundcloud = this.currentSong.url.includes('soundcloud.com');
+      const isSoundcloud = this.currentSong.url.includes('soundcloud.com') || this.currentSong.url.startsWith('scsearch:');
+
+      let targetUrl = this.currentSong.url;
+      // Si es una búsqueda libre o el servidor de YouTube está bloqueado en Render, transmitimos mediante SoundCloud Stream
+      if (!isYouTube && !isSoundcloud && !targetUrl.startsWith('http')) {
+        targetUrl = `scsearch:${this.currentSong.title || targetUrl}`;
+      }
 
       const ytdlArgs = [
         '-f', 'bestaudio/best',
@@ -319,7 +343,7 @@ class MusicQueue {
         );
       }
 
-      ytdlArgs.push(this.currentSong.url);
+      ytdlArgs.push(targetUrl);
 
       // 1. Proceso de extracción directa en streaming sin guardar en disco
       const ytdlProcess = cp.spawn(ytdlBin, ytdlArgs, {
@@ -370,6 +394,8 @@ class MusicQueue {
         const data = buildDashboard(this);
         this.dashboardMessage = await this.textChannel.send(data).catch(() => null);
       }
+
+      this.startLiveUpdate();
 
     } catch (err) {
       console.error('[AUDIO ERROR]:', err.message || err);
