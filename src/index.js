@@ -253,52 +253,59 @@ class MusicQueue {
         try { fs.chmodSync(ytdlBin, '755'); } catch {}
       }
 
-      console.log(`[AUDIO] Iniciando reproducción de: ${this.currentSong.title} (${this.currentSong.url})`);
+      console.log(`[AUDIO] Obteniendo enlace de audio directo para: ${this.currentSong.title}`);
 
-      const ytdlProcess = cp.spawn(ytdlBin, [
-        '-f', 'bestaudio/best',
-        '-o', '-',
-        '--no-playlist',
-        '--force-ipv4',
-        '--no-warnings',
-        '--no-check-certificates',
-        '--extractor-args', 'youtube:player_client=android,web',
-        '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        this.currentSong.url
-      ], {
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
+      // 1. Obtener la URL directa del stream de audio usando el cliente oficial Android
+      const directUrl = await new Promise((resolve, reject) => {
+        const p = cp.spawn(ytdlBin, [
+          '-f', 'bestaudio/best',
+          '--no-playlist',
+          '--force-ipv4',
+          '--extractor-args', 'youtube:player_client=android',
+          '-g',
+          this.currentSong.url
+        ], { windowsHide: true });
+
+        let output = '';
+        let errOutput = '';
+        p.stdout.on('data', d => { output += d.toString(); });
+        p.stderr.on('data', d => { errOutput += d.toString(); });
+        p.on('close', code => {
+          const streamUrl = output.trim().split('\n')[0];
+          if (streamUrl && streamUrl.startsWith('http')) {
+            resolve(streamUrl);
+          } else {
+            reject(new Error(errOutput || 'No se pudo obtener URL directa de audio'));
+          }
+        });
+        p.on('error', reject);
       });
 
+      console.log(`[AUDIO] Conectando FFmpeg al stream de audio directo...`);
+
+      // 2. FFmpeg decodifica el audio directamente desde los servidores de Google con reconexión activa
       const ffmpegProcess = cp.spawn(ffmpeg, [
-        '-i', 'pipe:0',
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
+        '-i', directUrl,
         '-f', 's16le',
         '-ar', '48000',
         '-ac', '2',
         'pipe:1'
       ], {
         windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe']
       });
 
-      this.currentYtdlProcess = ytdlProcess;
       this.currentFfmpegProcess = ffmpegProcess;
-
-      ytdlProcess.stdout.pipe(ffmpegProcess.stdin);
-
-      ytdlProcess.stderr.on('data', d => {
-        const msg = d.toString();
-        if (msg.includes('ERROR:')) console.error('[YT-DLP ERROR]:', msg.trim());
-      });
 
       ffmpegProcess.stderr.on('data', d => {
         const msg = d.toString();
         if (msg.includes('Error') || msg.includes('Invalid')) console.error('[FFMPEG ERROR]:', msg.trim());
       });
 
-      ytdlProcess.on('error', (err) => console.error('[YT-DLP SPAWN ERROR]:', err));
       ffmpegProcess.on('error', (err) => console.error('[FFMPEG SPAWN ERROR]:', err));
-      ffmpegProcess.stdin.on('error', () => {});
 
       const resource = createAudioResource(ffmpegProcess.stdout, {
         inputType: StreamType.Raw,
@@ -308,7 +315,7 @@ class MusicQueue {
       resource.volume?.setVolume(this.volume / 100);
       this.player.play(resource);
 
-      console.log('✅ Audio resource cargado al reproductor.');
+      console.log('✅ Audio resource cargado al reproductor y sonando.');
 
       // Si ya hay un menú abierto, lo editamos para no crear mensajes nuevos
       if (this.dashboardMessage) {
@@ -319,7 +326,7 @@ class MusicQueue {
       }
 
     } catch (err) {
-      console.error('Error al reproducir audio:', err);
+      console.error('[AUDIO ERROR CRÍTICO]:', err.message || err);
       this.playNext();
     }
   }
