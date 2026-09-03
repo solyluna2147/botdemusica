@@ -257,7 +257,8 @@ class MusicQueue {
         '--force-ipv4',
         '--no-warnings',
         '--no-check-certificates',
-        '--buffer-size', '64K',
+        '--extractor-args', 'youtube:player_client=android,web',
+        '--add-header', 'User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         this.currentSong.url
       ], {
         windowsHide: true,
@@ -269,7 +270,6 @@ class MusicQueue {
         '-f', 's16le',
         '-ar', '48000',
         '-ac', '2',
-        '-b:a', '128k',
         'pipe:1'
       ], {
         windowsHide: true,
