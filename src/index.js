@@ -520,20 +520,12 @@ async function handleAddSong(query, messageOrInteraction, voiceChannel) {
     queue.connection = connection;
     connection.subscribe(queue.player);
 
-    connection.on(VoiceConnectionStatus.Ready, () => {
-      console.log('🔊 [VOZ DISCORD] Conexión de voz READY y lista para emitir audio.');
-    });
-
-    connection.on(VoiceConnectionStatus.Disconnected, async () => {
-      try {
-        await Promise.race([
-          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-        ]);
-      } catch {
-        queue.destroy();
-      }
-    });
+    try {
+      await entersState(queue.connection, VoiceConnectionStatus.Ready, 15_000);
+      console.log('🔊 [VOZ DISCORD] Conexión de voz READY confirmada.');
+    } catch (err) {
+      console.error('❌ [VOZ ERROR]: No se pudo conectar al canal de voz a tiempo:', err);
+    }
   } else if (queue.connection) {
     queue.connection.subscribe(queue.player);
   }
@@ -600,12 +592,10 @@ client.on('messageCreate', async (message) => {
       const { queue, songInfo } = await handleAddSong(query, message, voiceChannel);
       if (statusMsg) {
         await statusMsg.edit(`🎶 Reproduciendo ahora: **${songInfo.title}** (\`${songInfo.duration}\`)`).catch(() => {});
-        setTimeout(() => statusMsg.delete().catch(() => {}), 5000);
       }
     } catch (err) {
       if (statusMsg) {
         await statusMsg.edit(`❌ Error al reproducir: ${err.message}`).catch(() => {});
-        setTimeout(() => statusMsg.delete().catch(() => {}), 6000);
       } else {
         message.channel.send(`❌ Error: ${err.message}`).catch(() => {});
       }
