@@ -61,6 +61,38 @@ const bannerGifPath = path.join(__dirname, 'gifs', 'banner.gif');
 // Mapa de colas por servidor
 const queues = new Map();
 
+function formatTime(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function createProgressBar(currentMs, totalDurationStr) {
+  let totalMs = 0;
+  if (totalDurationStr && totalDurationStr.includes(':')) {
+    const parts = totalDurationStr.split(':').map(Number);
+    if (parts.length === 2) {
+      totalMs = (parts[0] * 60 + parts[1]) * 1000;
+    } else if (parts.length === 3) {
+      totalMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+    }
+  }
+
+  const currentStr = formatTime(currentMs);
+  if (!totalMs || totalMs <= 0) {
+    return `🔴 🔘━━━━━━━━━━━━━━━━━━━ 📡 En Directo`;
+  }
+
+  const percentage = Math.min(Math.max(currentMs / totalMs, 0), 1);
+  const totalBars = 15;
+  const progressBars = Math.round(totalBars * percentage);
+  const emptyBars = totalBars - progressBars;
+
+  const bar = '━'.repeat(Math.max(progressBars - 1, 0)) + '🔘' + '━'.repeat(Math.max(emptyBars, 0));
+  return `▶️ \`${currentStr}\` [${bar}] \`${totalDurationStr}\``;
+}
+
 /**
  * Genera el Embed y los Botones del Panel de Control Principal con banner GIF
  */
@@ -80,10 +112,14 @@ function buildDashboard(queue) {
       ? queue.songs.slice(0, 3).map((s, i) => `\`${i + 1}.\` [${s.title.slice(0, 35)}](${s.url}) (\`${s.duration}\`)`).join('\n') + (queue.songs.length > 3 ? `\n*...y ${queue.songs.length - 3} más.*` : '')
       : '*No hay canciones en espera.*';
 
+    const currentMs = queue.songStartTime ? (Date.now() - queue.songStartTime) : 0;
+    const progressBar = createProgressBar(currentMs, current.duration);
+
     embed.setDescription(
       `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `🎶 **EN REPRODUCCIÓN AHORA**\n` +
       `**[${current.title}](${current.url})**\n\n` +
+      `${progressBar}\n\n` +
       `⏱️ **Duración:** \`${current.duration}\`  •  👤 **Añadida por:** ${current.requestedBy}\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━`
     )
@@ -323,6 +359,7 @@ class MusicQueue {
       });
 
       resource.volume?.setVolume(this.volume / 100);
+      this.songStartTime = Date.now();
       this.player.play(resource);
 
       console.log('📡 [STREAMING ACTIVO] Audio reproduciéndose en el canal de voz.');
@@ -592,7 +629,7 @@ client.on('messageCreate', async (message) => {
     try {
       const { queue, songInfo } = await handleAddSong(query, message, voiceChannel);
       if (statusMsg) {
-        await statusMsg.edit(`🎶 Reproduciendo ahora: **${songInfo.title}** (\`${songInfo.duration}\`)`).catch(() => {});
+        statusMsg.delete().catch(() => {});
       }
     } catch (err) {
       if (statusMsg) {
