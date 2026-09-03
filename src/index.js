@@ -553,7 +553,7 @@ async function handleAddSong(query, messageOrInteraction, voiceChannel) {
     const v = search.videos[0];
     songInfo = {
       title: v.title,
-      url: v.url,
+      url: `scsearch:${v.title}`,
       duration: v.timestamp || 'Desconocida',
       thumbnail: v.thumbnail,
       requestedBy: author
