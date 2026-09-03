@@ -258,7 +258,7 @@ class MusicQueue {
       // 1. Obtener la URL directa del stream de audio usando el cliente oficial Android
       const directUrl = await new Promise((resolve, reject) => {
         const p = cp.spawn(ytdlBin, [
-          '-f', 'bestaudio/best',
+          '-f', '18/bestaudio/best',
           '--no-playlist',
           '--force-ipv4',
           '--extractor-args', 'youtube:player_client=android',
@@ -271,8 +271,8 @@ class MusicQueue {
         p.stdout.on('data', d => { output += d.toString(); });
         p.stderr.on('data', d => { errOutput += d.toString(); });
         p.on('close', code => {
-          const streamUrl = output.trim().split('\n')[0];
-          if (streamUrl && streamUrl.startsWith('http')) {
+          const streamUrl = output.trim().split('\n').find(l => l.startsWith('http'));
+          if (streamUrl) {
             resolve(streamUrl);
           } else {
             reject(new Error(errOutput || 'No se pudo obtener URL directa de audio'));
@@ -454,18 +454,25 @@ async function handleAddSong(query, messageOrInteraction, voiceChannel) {
   let songInfo = null;
 
   if (query.startsWith('http://') || query.startsWith('https://')) {
-    const raw = await youtubedl(query, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      preferFreeFormats: true
-    });
-    songInfo = {
-      title: raw.title,
-      url: raw.webpage_url || query,
-      duration: new Date((raw.duration || 0) * 1000).toISOString().slice(14, 19),
-      thumbnail: raw.thumbnail,
-      requestedBy: author
-    };
+    const search = await yts(query);
+    if (search && search.videos && search.videos.length > 0) {
+      const v = search.videos[0];
+      songInfo = {
+        title: v.title,
+        url: v.url,
+        duration: v.timestamp || 'Desconocida',
+        thumbnail: v.thumbnail,
+        requestedBy: author
+      };
+    } else {
+      songInfo = {
+        title: 'Canción en línea',
+        url: query,
+        duration: '03:30',
+        thumbnail: 'https://i.ibb.co/Mm7y46n/36m5Vn-E.gif',
+        requestedBy: author
+      };
+    }
   } else {
     const search = await yts(query);
     if (!search || !search.videos.length) {
