@@ -266,13 +266,14 @@ class MusicQueue {
 
       console.log(`[AUDIO] Obteniendo enlace de audio directo para: ${this.currentSong.title}`);
 
-      // 1. Obtener la URL directa del stream de audio usando el cliente oficial Android
+      // 1. Obtener la URL directa del stream de audio usando el cliente oficial Android/VR
       const directUrl = await new Promise((resolve, reject) => {
         const p = cp.spawn(ytdlBin, [
           '-f', '18/bestaudio/best',
           '--no-playlist',
           '--force-ipv4',
-          '--extractor-args', 'youtube:player_client=android',
+          '--extractor-args', 'youtube:player_client=android_vr,android',
+          '--user-agent', 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; es_ES; Pixel 8 Pro)',
           '-g',
           this.currentSong.url
         ], { windowsHide: true });
