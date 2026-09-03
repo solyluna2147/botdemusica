@@ -254,6 +254,10 @@ class MusicQueue {
         '-f', 'bestaudio/best',
         '-o', '-',
         '--no-playlist',
+        '--force-ipv4',
+        '--no-warnings',
+        '--no-check-certificates',
+        '--buffer-size', '64K',
         this.currentSong.url
       ], {
         windowsHide: true,
@@ -265,6 +269,7 @@ class MusicQueue {
         '-f', 's16le',
         '-ar', '48000',
         '-ac', '2',
+        '-b:a', '128k',
         'pipe:1'
       ], {
         windowsHide: true,
