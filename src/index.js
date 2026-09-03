@@ -594,18 +594,21 @@ client.on('messageCreate', async (message) => {
       return message.reply('⚠️ ¡Debes estar en un canal de voz!');
     }
 
-    message.delete().catch(() => {}); // Borra el comando del usuario para mantener el chat limpio
+    const statusMsg = await message.channel.send(`🔍 Buscando **${query}** y conectando al canal de voz...`).catch(() => null);
 
     try {
       const { queue, songInfo } = await handleAddSong(query, message, voiceChannel);
-      if (queue.playing && queue.songs.length > 0 && queue.dashboardMessage) {
-        // Notificación temporal que se auto-elimina para no spamear
-        const temp = await message.channel.send(`✅ Añadida a la cola: **${songInfo.title}** (#${queue.songs.length})`);
-        setTimeout(() => temp.delete().catch(() => {}), 5000);
+      if (statusMsg) {
+        await statusMsg.edit(`🎶 Reproduciendo ahora: **${songInfo.title}** (\`${songInfo.duration}\`)`).catch(() => {});
+        setTimeout(() => statusMsg.delete().catch(() => {}), 5000);
       }
     } catch (err) {
-      const temp = await message.channel.send(`❌ ${err.message}`);
-      setTimeout(() => temp.delete().catch(() => {}), 6000);
+      if (statusMsg) {
+        await statusMsg.edit(`❌ Error al reproducir: ${err.message}`).catch(() => {});
+        setTimeout(() => statusMsg.delete().catch(() => {}), 6000);
+      } else {
+        message.channel.send(`❌ Error: ${err.message}`).catch(() => {});
+      }
     }
   }
 
