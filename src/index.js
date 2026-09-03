@@ -318,32 +318,19 @@ class MusicQueue {
         try { fs.chmodSync(ytdlBin, '755'); } catch {}
       }
 
-      console.log(`[AUDIO] Transmitiendo audio en directo: ${this.currentSong.title}`);
-
-      const isYouTube = this.currentSong.url.includes('youtube.com') || this.currentSong.url.includes('youtu.be');
-      const isSoundcloud = this.currentSong.url.includes('soundcloud.com') || this.currentSong.url.startsWith('scsearch:');
+      console.log(`[AUDIO] Transmitiendo audio con motor SoundCloud: ${this.currentSong.title}`);
 
       let targetUrl = this.currentSong.url;
-      // Si es una búsqueda libre o el servidor de YouTube está bloqueado en Render, transmitimos mediante SoundCloud Stream
-      if (!isYouTube && !isSoundcloud && !targetUrl.startsWith('http')) {
+      if (!targetUrl.includes('soundcloud.com') && !targetUrl.startsWith('scsearch:')) {
         targetUrl = `scsearch:${this.currentSong.title || targetUrl}`;
       }
 
       const ytdlArgs = [
         '-f', 'bestaudio/best',
         '-o', '-',
-        '--no-playlist'
+        '--no-playlist',
+        targetUrl
       ];
-
-      if (isYouTube) {
-        ytdlArgs.push(
-          '--force-ipv4',
-          '--extractor-args', 'youtube:player_client=android_vr,android',
-          '--user-agent', 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; es_ES; Pixel 8 Pro)'
-        );
-      }
-
-      ytdlArgs.push(targetUrl);
 
       // 1. Proceso de extracción directa en streaming sin guardar en disco
       const ytdlProcess = cp.spawn(ytdlBin, ytdlArgs, {
@@ -526,24 +513,37 @@ async function handleAddSong(query, messageOrInteraction, voiceChannel) {
   let songInfo = null;
 
   if (query.startsWith('http://') || query.startsWith('https://')) {
-    const search = await yts(query);
-    if (search && search.videos && search.videos.length > 0) {
-      const v = search.videos[0];
+    const isSoundCloudUrl = query.includes('soundcloud.com');
+
+    if (isSoundCloudUrl) {
       songInfo = {
-        title: v.title,
-        url: v.url,
-        duration: v.timestamp || 'Desconocida',
-        thumbnail: v.thumbnail,
-        requestedBy: author
-      };
-    } else {
-      songInfo = {
-        title: 'Canción en línea',
+        title: 'Pista de SoundCloud',
         url: query,
         duration: '03:30',
         thumbnail: 'https://i.ibb.co/Mm7y46n/36m5Vn-E.gif',
         requestedBy: author
       };
+    } else {
+      // Si es un enlace de YouTube o cualquier otro, leemos el título y lo reproducimos directo por SoundCloud
+      const search = await yts(query);
+      if (search && search.videos && search.videos.length > 0) {
+        const v = search.videos[0];
+        songInfo = {
+          title: v.title,
+          url: `scsearch:${v.title}`,
+          duration: v.timestamp || 'Desconocida',
+          thumbnail: v.thumbnail,
+          requestedBy: author
+        };
+      } else {
+        songInfo = {
+          title: 'Canción en línea',
+          url: `scsearch:${query}`,
+          duration: '03:30',
+          thumbnail: 'https://i.ibb.co/Mm7y46n/36m5Vn-E.gif',
+          requestedBy: author
+        };
+      }
     }
   } else {
     const search = await yts(query);
