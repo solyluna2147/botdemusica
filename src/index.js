@@ -19,6 +19,7 @@ const {
   AudioPlayerStatus,
   VoiceConnectionStatus,
   StreamType,
+  NoSubscriberBehavior,
   entersState
 } = require('@discordjs/voice');
 const yts = require('yt-search');
@@ -172,7 +173,11 @@ class MusicQueue {
     this.textChannel = textChannel;
     this.voiceChannel = voiceChannel;
     this.connection = null;
-    this.player = createAudioPlayer();
+    this.player = createAudioPlayer({
+      behaviors: {
+        noSubscriber: NoSubscriberBehavior.Play
+      }
+    });
     this.songs = [];
     this.previousSongs = []; // Historial de canciones para el botón ANTERIOR
     this.volume = 100;
@@ -486,7 +491,8 @@ async function handleAddSong(query, messageOrInteraction, voiceChannel) {
       channelId: voiceChannel.id,
       guildId: guild.id,
       adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: true
+      selfDeaf: false,
+      selfMute: false
     });
 
     queue.connection = connection;
