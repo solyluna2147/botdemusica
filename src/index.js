@@ -283,13 +283,15 @@ class MusicQueue {
 
       console.log(`[AUDIO] Conectando FFmpeg al stream de audio directo...`);
 
-      // 2. FFmpeg decodifica el audio directamente desde los servidores de Google con reconexión activa
+      // 2. FFmpeg decodifica y empaqueta en Ogg Opus nativo (el formato directo de Discord)
       const ffmpegProcess = cp.spawn(ffmpeg, [
         '-reconnect', '1',
         '-reconnect_streamed', '1',
         '-reconnect_delay_max', '5',
         '-i', directUrl,
-        '-f', 's16le',
+        '-c:a', 'libopus',
+        '-b:a', '128k',
+        '-f', 'opus',
         '-ar', '48000',
         '-ac', '2',
         'pipe:1'
@@ -308,14 +310,14 @@ class MusicQueue {
       ffmpegProcess.on('error', (err) => console.error('[FFMPEG SPAWN ERROR]:', err));
 
       const resource = createAudioResource(ffmpegProcess.stdout, {
-        inputType: StreamType.Raw,
+        inputType: StreamType.OggOpus,
         inlineVolume: true
       });
 
       resource.volume?.setVolume(this.volume / 100);
       this.player.play(resource);
 
-      console.log('✅ Audio resource cargado al reproductor y sonando.');
+      console.log('✅ Audio OggOpus nativo transmitiéndose a Discord.');
 
       // Si ya hay un menú abierto, lo editamos para no crear mensajes nuevos
       if (this.dashboardMessage) {
@@ -512,6 +514,10 @@ async function handleAddSong(query, messageOrInteraction, voiceChannel) {
     queue.connection = connection;
     connection.subscribe(queue.player);
 
+    connection.on(VoiceConnectionStatus.Ready, () => {
+      console.log('🔊 [VOZ DISCORD] Conexión de voz READY y lista para emitir audio.');
+    });
+
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
       try {
         await Promise.race([
@@ -522,6 +528,8 @@ async function handleAddSong(query, messageOrInteraction, voiceChannel) {
         queue.destroy();
       }
     });
+  } else if (queue.connection) {
+    queue.connection.subscribe(queue.player);
   }
 
   queue.songs.push(songInfo);
@@ -704,182 +712,185 @@ client.on('messageCreate', async (message) => {
 
 // INTERACCIONES CON BOTONES Y MODALS
 client.on('interactionCreate', async (interaction) => {
-  const queue = queues.get(interaction.guildId);
-  const voiceChannel = interaction.member?.voice?.channel;
+  try {
+    const queue = queues.get(interaction.guildId);
+    const voiceChannel = interaction.member?.voice?.channel;
 
-  // 1. Manejo del Modal para añadir canción DIRECTA (ignorando cola)
-  if (interaction.isModalSubmit() && interaction.customId === 'modal_add_direct') {
-    const query = interaction.fields.getTextInputValue('input_song_query');
-    if (!voiceChannel) {
-      return interaction.reply({ content: '⚠️ ¡Debes estar en un canal de voz!', ephemeral: true });
-    }
-
-    await interaction.deferReply({ ephemeral: true });
-
-    try {
-      const { songInfo, queue: q } = await handleAddSong(query, interaction, voiceChannel);
-      // Si ya estaba sonando, pasar esta canción de inmediato al primer lugar y reproducir
-      if (q.playing && q.songs.length > 0) {
-        const directSong = q.songs.pop(); // Sacar la recién añadida
-        q.songs.unshift(directSong); // Ponerla como número 1
-        q.player.stop(true); // Reproducir ya
+    // 1. Manejo del Modal para añadir canción DIRECTA (ignorando cola)
+    if (interaction.isModalSubmit() && interaction.customId === 'modal_add_direct') {
+      const query = interaction.fields.getTextInputValue('input_song_query');
+      if (!voiceChannel) {
+        return interaction.reply({ content: '⚠️ ¡Debes estar en un canal de voz!', ephemeral: true }).catch(() => {});
       }
-      await interaction.editReply({ content: `⚡ **Puesta directamente:** ${songInfo.title} (\`${songInfo.duration}\`)` });
-      setTimeout(() => { interaction.deleteReply().catch(() => {}); }, 3000);
-    } catch (err) {
-      await interaction.editReply({ content: `❌ Error: ${err.message}` });
-      setTimeout(() => { interaction.deleteReply().catch(() => {}); }, 4000);
-    }
-    return;
-  }
 
-  // 2. Manejo del Modal para añadir a la COLA
-  if (interaction.isModalSubmit() && interaction.customId === 'modal_add_queue') {
-    const query = interaction.fields.getTextInputValue('input_song_query');
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+      try {
+        const { songInfo, queue: q } = await handleAddSong(query, interaction, voiceChannel);
+        if (q.playing && q.songs.length > 0) {
+          const directSong = q.songs.pop();
+          q.songs.unshift(directSong);
+          q.player.stop(true);
+        }
+        await interaction.editReply({ content: `⚡ **Puesta directamente:** ${songInfo.title} (\`${songInfo.duration}\`)` }).catch(() => {});
+        setTimeout(() => { interaction.deleteReply().catch(() => {}); }, 3000);
+      } catch (err) {
+        await interaction.editReply({ content: `❌ Error: ${err.message}` }).catch(() => {});
+        setTimeout(() => { interaction.deleteReply().catch(() => {}); }, 4000);
+      }
+      return;
+    }
+
+    // 2. Manejo del Modal para añadir a la COLA
+    if (interaction.isModalSubmit() && interaction.customId === 'modal_add_queue') {
+      const query = interaction.fields.getTextInputValue('input_song_query');
+      if (!voiceChannel) {
+        return interaction.reply({ content: '⚠️ ¡Debes estar en un canal de voz!', ephemeral: true }).catch(() => {});
+      }
+
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+      try {
+        const { songInfo, queue: q } = await handleAddSong(query, interaction, voiceChannel);
+        await interaction.editReply({ content: `➕ **Añadida a la cola:** ${songInfo.title} (#${q.songs.length})` }).catch(() => {});
+        setTimeout(() => { interaction.deleteReply().catch(() => {}); }, 3000);
+      } catch (err) {
+        await interaction.editReply({ content: `❌ Error: ${err.message}` }).catch(() => {});
+        setTimeout(() => { interaction.deleteReply().catch(() => {}); }, 4000);
+      }
+      return;
+    }
+
+    if (!interaction.isButton()) return;
+
+    // Abrir Modal de AÑADIR PISTA DIRECTA
+    if (interaction.customId === 'dash_add_direct') {
+      if (!voiceChannel) {
+        return interaction.reply({ content: '⚠️ ¡Debes estar en un canal de voz!', ephemeral: true }).catch(() => {});
+      }
+
+      const modal = new ModalBuilder()
+        .setCustomId('modal_add_direct')
+        .setTitle('⚡ Poner Pista Directa (Sin Espera)');
+
+      const input = new TextInputBuilder()
+        .setCustomId('input_song_query')
+        .setLabel('Canción o enlace a reproducir inmediatamente')
+        .setPlaceholder('Ej: JC Reyes Messi o pega un link...')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return interaction.showModal(modal).catch(() => {});
+    }
+
+    // Abrir Modal de AÑADIR A LA COLA
+    if (interaction.customId === 'dash_add_queue') {
+      if (!voiceChannel) {
+        return interaction.reply({ content: '⚠️ ¡Debes estar en un canal de voz!', ephemeral: true }).catch(() => {});
+      }
+
+      const modal = new ModalBuilder()
+        .setCustomId('modal_add_queue')
+        .setTitle('➕ Añadir Pista a la Cola');
+
+      const input = new TextInputBuilder()
+        .setCustomId('input_song_query')
+        .setLabel('Canción o enlace para poner en cola')
+        .setPlaceholder('Ej: Despacito o pega un link...')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return interaction.showModal(modal).catch(() => {});
+    }
+
     if (!voiceChannel) {
-      return interaction.reply({ content: '⚠️ ¡Debes estar en un canal de voz!', ephemeral: true });
+      return interaction.reply({ content: '⚠️ ¡Debes estar en un canal de voz!', ephemeral: true }).catch(() => {});
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    // Pausar / Reanudar en el Dashboard
+    if (interaction.customId === 'dash_pause_resume') {
+      if (!queue || !queue.playing) return interaction.reply({ content: '⚠️ No hay música activa.', ephemeral: true }).catch(() => {});
 
-    try {
-      const { songInfo, queue: q } = await handleAddSong(query, interaction, voiceChannel);
-      await interaction.editReply({ content: `➕ **Añadida a la cola:** ${songInfo.title} (#${q.songs.length})` });
-      setTimeout(() => { interaction.deleteReply().catch(() => {}); }, 3000);
-    } catch (err) {
-      await interaction.editReply({ content: `❌ Error: ${err.message}` });
-      setTimeout(() => { interaction.deleteReply().catch(() => {}); }, 4000);
-    }
-    return;
-  }
-
-  if (!interaction.isButton()) return;
-
-  // Abrir Modal de AÑADIR PISTA DIRECTA
-  if (interaction.customId === 'dash_add_direct') {
-    if (!voiceChannel) {
-      return interaction.reply({ content: '⚠️ ¡Debes estar en un canal de voz!', ephemeral: true });
-    }
-
-    const modal = new ModalBuilder()
-      .setCustomId('modal_add_direct')
-      .setTitle('⚡ Poner Pista Directa (Sin Espera)');
-
-    const input = new TextInputBuilder()
-      .setCustomId('input_song_query')
-      .setLabel('Canción o enlace a reproducir inmediatamente')
-      .setPlaceholder('Ej: JC Reyes Messi o pega un link...')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
-    modal.addComponents(new ActionRowBuilder().addComponents(input));
-    return interaction.showModal(modal);
-  }
-
-  // Abrir Modal de AÑADIR A LA COLA
-  if (interaction.customId === 'dash_add_queue') {
-    if (!voiceChannel) {
-      return interaction.reply({ content: '⚠️ ¡Debes estar en un canal de voz!', ephemeral: true });
-    }
-
-    const modal = new ModalBuilder()
-      .setCustomId('modal_add_queue')
-      .setTitle('➕ Añadir Pista a la Cola');
-
-    const input = new TextInputBuilder()
-      .setCustomId('input_song_query')
-      .setLabel('Canción o enlace para poner en cola')
-      .setPlaceholder('Ej: Despacito o pega un link...')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
-
-    modal.addComponents(new ActionRowBuilder().addComponents(input));
-    return interaction.showModal(modal);
-  }
-
-  if (!voiceChannel) {
-    return interaction.reply({ content: '⚠️ ¡Debes estar en un canal de voz!', ephemeral: true });
-  }
-
-  // Pausar / Reanudar en el Dashboard
-  if (interaction.customId === 'dash_pause_resume') {
-    if (!queue || !queue.playing) return interaction.reply({ content: '⚠️ No hay música activa.', ephemeral: true });
-
-    if (queue.paused) {
-      queue.player.unpause();
-      queue.paused = false;
-    } else {
-      queue.player.pause();
-      queue.paused = true;
-    }
-
-    await interaction.update(buildDashboard(queue));
-  }
-
-  // Canción Anterior en el Dashboard
-  else if (interaction.customId === 'dash_prev') {
-    if (!queue || queue.previousSongs.length === 0) {
-      return interaction.reply({ content: '⚠️ No hay canciones anteriores en el historial.', ephemeral: true });
-    }
-    interaction.deferUpdate().catch(() => {});
-    queue.playPrevious();
-  }
-
-  // Canción Siguiente (Saltar) en el Dashboard
-  else if (interaction.customId === 'dash_skip') {
-    if (!queue || !queue.playing) return interaction.reply({ content: '⚠️ No hay música activa.', ephemeral: true });
-    interaction.deferUpdate().catch(() => {});
-    queue.player.stop(true);
-  }
-
-  // Quitar / Detener en el Dashboard
-  else if (interaction.customId === 'dash_stop') {
-    if (!queue || !queue.playing) return interaction.reply({ content: '⚠️ No hay música activa.', ephemeral: true });
-    interaction.deferUpdate().catch(() => {});
-    queue.destroy();
-  }
-
-  // Actualizar Dashboard
-  else if (interaction.customId === 'dash_refresh') {
-    await interaction.update(buildDashboard(queue));
-  }
-
-  // Ver Cola completa en ventana emergente (efímera con diseño premium rojo y blanco)
-  else if (interaction.customId === 'dash_view_queue' || interaction.customId === 'music_queue') {
-    if (!queue || (!queue.playing && queue.songs.length === 0)) {
-      return interaction.reply({ content: '⚪ **La cola está vacía.** Pulsa `➕ AÑADIR COLA` para poner música.', ephemeral: true });
-    }
-
-    const current = queue.currentSong;
-    const embed = new EmbedBuilder()
-      .setColor(config.colors.primary)
-      .setTitle('🔴 LISTA DE REPRODUCCIÓN EN CURSO')
-      .setDescription(`▶️ **Sonando Ahora:**\n**[${current ? current.title : 'Nada'}](${current ? current.url : ''})**\n⏱️ \`${current ? current.duration : '00:00'}\`  •  👤 ${current ? current.requestedBy : 'N/A'}`)
-      .setThumbnail(current ? current.thumbnail : null)
-      .setTimestamp();
-
-    if (queue.songs.length > 0) {
-      const songFields = queue.songs.slice(0, 8).map((s, i) => {
-        return {
-          name: `${i === 0 ? '▶️ Siguiente en sonar:' : `\`#${i + 1}\` Pista en espera:`}`,
-          value: `🎵 **[${s.title}](${s.url})**\n⏱️ \`${s.duration}\` | 👤 ${s.requestedBy}`,
-          inline: false
-        };
-      });
-
-      embed.addFields(songFields);
-
-      if (queue.songs.length > 8) {
-        embed.setFooter({ text: `...y ${queue.songs.length - 8} pistas más en la cola. | Usa .r <número> para eliminar` });
+      if (queue.paused) {
+        queue.player.unpause();
+        queue.paused = false;
       } else {
-        embed.setFooter({ text: `Total en espera: ${queue.songs.length} pistas | Usa .r <número> para eliminar` });
+        queue.player.pause();
+        queue.paused = true;
       }
-    } else {
-      embed.addFields({ name: '📑 Cola de espera', value: '*No hay más pistas en espera. ¡Añade más con el botón de abajo!*', inline: false });
-      embed.setFooter({ text: 'Fin de la lista | Prefijo: .' });
+
+      await interaction.update(buildDashboard(queue)).catch(() => {});
     }
 
-    interaction.reply({ embeds: [embed], ephemeral: true });
+    // Canción Anterior en el Dashboard
+    else if (interaction.customId === 'dash_prev') {
+      if (!queue || queue.previousSongs.length === 0) {
+        return interaction.reply({ content: '⚠️ No hay canciones anteriores en el historial.', ephemeral: true }).catch(() => {});
+      }
+      interaction.deferUpdate().catch(() => {});
+      queue.playPrevious();
+    }
+
+    // Canción Siguiente (Saltar) en el Dashboard
+    else if (interaction.customId === 'dash_skip') {
+      if (!queue || !queue.playing) return interaction.reply({ content: '⚠️ No hay música activa.', ephemeral: true }).catch(() => {});
+      interaction.deferUpdate().catch(() => {});
+      queue.player.stop(true);
+    }
+
+    // Quitar / Detener en el Dashboard
+    else if (interaction.customId === 'dash_stop') {
+      if (!queue || !queue.playing) return interaction.reply({ content: '⚠️ No hay música activa.', ephemeral: true }).catch(() => {});
+      interaction.deferUpdate().catch(() => {});
+      queue.destroy();
+    }
+
+    // Actualizar Dashboard
+    else if (interaction.customId === 'dash_refresh') {
+      await interaction.update(buildDashboard(queue)).catch(() => {});
+    }
+
+    // Ver Cola completa en ventana emergente (efímera con diseño premium rojo y blanco)
+    else if (interaction.customId === 'dash_view_queue' || interaction.customId === 'music_queue') {
+      if (!queue || (!queue.playing && queue.songs.length === 0)) {
+        return interaction.reply({ content: '⚪ **La cola está vacía.** Pulsa `➕ AÑADIR COLA` para poner música.', ephemeral: true }).catch(() => {});
+      }
+
+      const current = queue.currentSong;
+      const embed = new EmbedBuilder()
+        .setColor(config.colors.primary)
+        .setTitle('🔴 LISTA DE REPRODUCCIÓN EN CURSO')
+        .setDescription(`▶️ **Sonando Ahora:**\n**[${current ? current.title : 'Nada'}](${current ? current.url : ''})**\n⏱️ \`${current ? current.duration : '00:00'}\`  •  👤 ${current ? current.requestedBy : 'N/A'}`)
+        .setThumbnail(current ? current.thumbnail : null)
+        .setTimestamp();
+
+      if (queue.songs.length > 0) {
+        const songFields = queue.songs.slice(0, 8).map((s, i) => {
+          return {
+            name: `${i === 0 ? '▶️ Siguiente en sonar:' : `\`#${i + 1}\` Pista en espera:`}`,
+            value: `🎵 **[${s.title}](${s.url})**\n⏱️ \`${s.duration}\` | 👤 ${s.requestedBy}`,
+            inline: false
+          };
+        });
+
+        embed.addFields(songFields);
+
+        if (queue.songs.length > 8) {
+          embed.setFooter({ text: `...y ${queue.songs.length - 8} pistas más en la cola. | Usa .r <número> para eliminar` });
+        } else {
+          embed.setFooter({ text: `Total en espera: ${queue.songs.length} pistas | Usa .r <número> para eliminar` });
+        }
+      } else {
+        embed.addFields({ name: '📑 Cola de espera', value: '*No hay más pistas en espera. ¡Añade más con el botón de abajo!*', inline: false });
+        embed.setFooter({ text: 'Fin de la lista | Prefijo: .' });
+      }
+
+      interaction.reply({ embeds: [embed], ephemeral: true }).catch(() => {});
+    }
+  } catch (err) {
+    // Silenciar errores de colisión de instancias concurrentes (Unknown Interaction 10062)
   }
 });
 
