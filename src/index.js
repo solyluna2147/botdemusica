@@ -243,6 +243,13 @@ class MusicQueue {
     this.paused = false;
 
     try {
+      // Asegurar permisos en Linux (Render)
+      if (!isWin && fs.existsSync(ytdlBin)) {
+        try { fs.chmodSync(ytdlBin, '755'); } catch {}
+      }
+
+      console.log(`[AUDIO] Iniciando reproducción de: ${this.currentSong.title} (${this.currentSong.url})`);
+
       const ytdlProcess = cp.spawn(ytdlBin, [
         '-f', 'bestaudio/best',
         '-o', '-',
@@ -250,7 +257,7 @@ class MusicQueue {
         this.currentSong.url
       ], {
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'pipe']
       });
 
       const ffmpegProcess = cp.spawn(ffmpeg, [
@@ -261,7 +268,7 @@ class MusicQueue {
         'pipe:1'
       ], {
         windowsHide: true,
-        stdio: ['pipe', 'pipe', 'ignore']
+        stdio: ['pipe', 'pipe', 'pipe']
       });
 
       this.currentYtdlProcess = ytdlProcess;
@@ -269,8 +276,18 @@ class MusicQueue {
 
       ytdlProcess.stdout.pipe(ffmpegProcess.stdin);
 
-      ytdlProcess.on('error', () => {});
-      ffmpegProcess.on('error', () => {});
+      ytdlProcess.stderr.on('data', d => {
+        const msg = d.toString();
+        if (msg.includes('ERROR:')) console.error('[YT-DLP ERROR]:', msg.trim());
+      });
+
+      ffmpegProcess.stderr.on('data', d => {
+        const msg = d.toString();
+        if (msg.includes('Error') || msg.includes('Invalid')) console.error('[FFMPEG ERROR]:', msg.trim());
+      });
+
+      ytdlProcess.on('error', (err) => console.error('[YT-DLP SPAWN ERROR]:', err));
+      ffmpegProcess.on('error', (err) => console.error('[FFMPEG SPAWN ERROR]:', err));
       ffmpegProcess.stdin.on('error', () => {});
 
       const resource = createAudioResource(ffmpegProcess.stdout, {
@@ -280,6 +297,8 @@ class MusicQueue {
 
       resource.volume?.setVolume(this.volume / 100);
       this.player.play(resource);
+
+      console.log('✅ Audio resource cargado al reproductor.');
 
       // Si ya hay un menú abierto, lo editamos para no crear mensajes nuevos
       if (this.dashboardMessage) {
