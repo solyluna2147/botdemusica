@@ -264,56 +264,58 @@ class MusicQueue {
         try { fs.chmodSync(ytdlBin, '755'); } catch {}
       }
 
-      console.log(`[AUDIO] Obteniendo enlace de audio directo para: ${this.currentSong.title}`);
+      console.log(`[AUDIO] Transmitiendo audio en directo: ${this.currentSong.title}`);
 
-      // 1. Obtener la URL directa del stream de audio usando el cliente oficial Android/VR
-      const directUrl = await new Promise((resolve, reject) => {
-        const p = cp.spawn(ytdlBin, [
-          '-f', '18/bestaudio/best',
-          '--no-playlist',
+      const isYouTube = this.currentSong.url.includes('youtube.com') || this.currentSong.url.includes('youtu.be');
+      const isSoundcloud = this.currentSong.url.includes('soundcloud.com');
+
+      const ytdlArgs = [
+        '-f', 'bestaudio/best',
+        '-o', '-',
+        '--no-playlist'
+      ];
+
+      if (isYouTube) {
+        ytdlArgs.push(
           '--force-ipv4',
           '--extractor-args', 'youtube:player_client=android_vr,android',
-          '--user-agent', 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; es_ES; Pixel 8 Pro)',
-          '-g',
-          this.currentSong.url
-        ], { windowsHide: true });
+          '--user-agent', 'com.google.android.youtube/19.29.37 (Linux; U; Android 14; es_ES; Pixel 8 Pro)'
+        );
+      }
 
-        let output = '';
-        let errOutput = '';
-        p.stdout.on('data', d => { output += d.toString(); });
-        p.stderr.on('data', d => { errOutput += d.toString(); });
-        p.on('close', code => {
-          const streamUrl = output.trim().split('\n').find(l => l.startsWith('http'));
-          if (streamUrl) {
-            resolve(streamUrl);
-          } else {
-            reject(new Error(errOutput || 'No se pudo obtener URL directa de audio'));
-          }
-        });
-        p.on('error', reject);
+      ytdlArgs.push(this.currentSong.url);
+
+      // 1. Proceso de extracción directa en streaming sin guardar en disco
+      const ytdlProcess = cp.spawn(ytdlBin, ytdlArgs, {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe']
       });
 
-      console.log(`[AUDIO] Conectando FFmpeg al stream de audio directo...`);
-
-      // 2. FFmpeg transmite el stream directo de YouTube sin descargar ningún archivo a disco
+      // 2. FFmpeg decodifica el flujo en tiempo real a formato Discord
       const ffmpegProcess = cp.spawn(ffmpeg, [
-        '-reconnect', '1',
-        '-reconnect_streamed', '1',
-        '-reconnect_delay_max', '5',
-        '-i', directUrl,
-        '-analyzeduration', '0',
-        '-loglevel', '0',
+        '-i', 'pipe:0',
         '-f', 's16le',
         '-ar', '48000',
         '-ac', '2',
         'pipe:1'
       ], {
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['pipe', 'pipe', 'ignore']
       });
 
+      this.currentYtdlProcess = ytdlProcess;
       this.currentFfmpegProcess = ffmpegProcess;
-      ffmpegProcess.on('error', () => {});
+
+      ytdlProcess.stdout.pipe(ffmpegProcess.stdin);
+
+      ytdlProcess.stderr.on('data', d => {
+        const str = d.toString();
+        if (str.includes('ERROR:')) console.error('[YT-DLP ERR]:', str.trim());
+      });
+
+      ytdlProcess.on('error', (err) => console.error('[YT-DLP PROCESS ERROR]:', err));
+      ffmpegProcess.on('error', (err) => console.error('[FFMPEG PROCESS ERROR]:', err));
+      ffmpegProcess.stdin.on('error', () => {});
 
       const resource = createAudioResource(ffmpegProcess.stdout, {
         inputType: StreamType.Raw,
@@ -323,9 +325,8 @@ class MusicQueue {
       resource.volume?.setVolume(this.volume / 100);
       this.player.play(resource);
 
-      console.log('📡 [STREAMING EN VIVO] Sonido transmitiéndose directamente al canal de voz.');
+      console.log('📡 [STREAMING ACTIVO] Audio reproduciéndose en el canal de voz.');
 
-      // Si ya hay un menú abierto, lo editamos para no crear mensajes nuevos
       if (this.dashboardMessage) {
         await this.updateDashboard();
       } else {
@@ -334,7 +335,7 @@ class MusicQueue {
       }
 
     } catch (err) {
-      console.error('[AUDIO ERROR CRÍTICO]:', err.message || err);
+      console.error('[AUDIO ERROR]:', err.message || err);
       this.playNext();
     }
   }
